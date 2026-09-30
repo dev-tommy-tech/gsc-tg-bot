@@ -3,8 +3,9 @@
 
 Required environment variables:
   GSC_SERVICE_ACCOUNT_JSON  Full service-account JSON (string) or path to the file
-  GSC_SITE_URL              Property URL, e.g. sc-domain:lodi646app.ph
-                            or https://lodi646app.ph/
+  GSC_SITE_URL              One or more GSC properties, separated by comma,
+                            semicolon, or newline. Example:
+                            sc-domain:a.com, sc-domain:b.com, https://c.com/
   TELEGRAM_BOT_TOKEN        Bot token from @BotFather
   TELEGRAM_CHAT_ID          Destination chat / group / channel id
 
@@ -74,6 +75,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "new": "new",
         "unknown": "Unknown",
         "inspect_failed": "inspect failed",
+        "failed_sites": "Failed sites",
     },
     "zh": {
         "title": "📊 GSC 每日 SEO 简报",
@@ -110,6 +112,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "new": "新",
         "unknown": "未知",
         "inspect_failed": "查询失败",
+        "failed_sites": "失败站点",
     },
 }
 
@@ -157,9 +160,27 @@ def load_credentials():
     return service_account.Credentials.from_service_account_info(info, scopes=SCOPES)
 
 
+def parse_site_urls() -> list[str]:
+    raw = env("GSC_SITE_URLS") or env("GSC_SITE_URL", required=True)
+    parts: list[str] = []
+    for chunk in raw.replace(";", "\n").replace(",", "\n").splitlines():
+        url = chunk.strip().strip("'\"")
+        if url:
+            parts.append(url)
+    seen: set[str] = set()
+    unique: list[str] = []
+    for url in parts:
+        if url in seen:
+            continue
+        seen.add(url)
+        unique.append(url)
+    if not unique:
+        raise SystemExit("No GSC site URLs found in GSC_SITE_URL / GSC_SITE_URLS")
+    return unique
+
+
 def gsc_clients(creds):
-    webmasters = build("searchconsole", "v1", credentials=creds, cache_discovery=False)
-    return webmasters
+    return build("searchconsole", "v1", credentials=creds, cache_discovery=False)
 
 
 def date_windows(lookback: int, lag: int) -> dict[str, date]:
@@ -520,6 +541,8 @@ def build_report(
     sitemaps: list[dict[str, Any]],
     inspections: list[dict[str, str]],
     top_n: int,
+    site_index: int = 1,
+    site_count: int = 1,
 ) -> str:
     now = datetime.now(TZ).strftime("%Y-%m-%d %H:%M")
     cur_range = f"{windows['current_start']} ~ {windows['current_end']}"
@@ -528,9 +551,11 @@ def build_report(
     best_queries = [q for q in top_by(queries, "clicks", top_n) if q["clicks"] > 0]
     drop_pages = biggest_drops(pages, top_n)
     drop_queries = biggest_drops(queries, top_n)
-
+    title = t["title"]
+    if site_count > 1:
+        title = f"{title} ({site_index}/{site_count})"
     lines = [
-        f"*{t['title']}*",
+        f"*{title}*",
         f"{t['site']}: `{site_url}`",
         f"{t['generated']}: `{now}` (UTC+8)",
         f"{t['current']}: `{cur_range}`",
@@ -555,42 +580,31 @@ def write_temp_discovery_cache() -> None:
     tempfile.tempdir = tempfile.gettempdir()
 
 
-def main() -> int:
-    write_temp_discovery_cache()
-    lang, t = load_strings()
-    print(f"Report language: {lang}")
-    site_url = env("GSC_SITE_URL", required=True).strip()
-    token = env("TELEGRAM_BOT_TOKEN", required=True).strip()
-    chat_id = env("TELEGRAM_CHAT_ID", required=True).strip()
-    lookback = int(env("GSC_LOOKBACK_DAYS", "28"))
-    lag = int(env("GSC_DATA_LAG_DAYS", "3"))
-    top_n = int(env("GSC_TOP_N", "8"))
-    inspect_n = int(env("GSC_INSPECT_N", "5"))
-
-    creds = load_credentials()
-    service = gsc_clients(creds)
-    windows = date_windows(lookback, lag)
-
-    try:
-        current_tot_raw = query_analytics(service, site_url, windows["current_start"], windows["current_end"])
-        previous_tot_raw = query_analytics(service, site_url, windows["previous_start"], windows["previous_end"])
-        current_pages = query_analytics(service, site_url, windows["current_start"], windows["current_end"], ["page"], 250)
-        previous_pages = query_analytics(service, site_url, windows["previous_start"], windows["previous_end"], ["page"], 250)
-        current_queries = query_analytics(service, site_url, windows["current_start"], windows["current_end"], ["query"], 250)
-        previous_queries = query_analytics(service, site_url, windows["previous_start"], windows["previous_end"], ["query"], 250)
-    except HttpError as exc:
-        raise SystemExit(f"Search Console API error: {exc}") from exc
+def fetch_and_build_report(
+    service,
+    t: dict[str, str],
+    site_url: str,
+    windows: dict[str, date],
+    top_n: int,
+    inspect_n: int,
+    site_index: int,
+    site_count: int,
+) -> str:
+    current_tot_raw = query_analytics(service, site_url, windows["current_start"], windows["current_end"])
+    previous_tot_raw = query_analytics(service, site_url, windows["previous_start"], windows["previous_end"])
+    current_pages = query_analytics(service, site_url, windows["current_start"], windows["current_end"], ["page"], 250)
+    previous_pages = query_analytics(service, site_url, windows["previous_start"], windows["previous_end"], ["page"], 250)
+    current_queries = query_analytics(service, site_url, windows["current_start"], windows["current_end"], ["query"], 250)
+    previous_queries = query_analytics(service, site_url, windows["previous_start"], windows["previous_end"], ["query"], 250)
 
     current_tot = totals_from_response(current_tot_raw)
     previous_tot = totals_from_response(previous_tot_raw)
     pages = compare_dimension(rows_by_key(current_pages), rows_by_key(previous_pages))
     queries = compare_dimension(rows_by_key(current_queries), rows_by_key(previous_queries))
     sitemaps = list_sitemaps(service, site_url)
-
     top_page_urls = [p["key"] for p in top_by(pages, "impressions", inspect_n)]
     inspections = inspect_top_pages(service, site_url, top_page_urls, inspect_n, t) if inspect_n > 0 else []
-
-    report = build_report(
+    return build_report(
         t=t,
         site_url=site_url,
         windows=windows,
@@ -601,9 +615,57 @@ def main() -> int:
         sitemaps=sitemaps,
         inspections=inspections,
         top_n=top_n,
+        site_index=site_index,
+        site_count=site_count,
     )
-    send_telegram(token, chat_id, report)
-    print("Report sent successfully.")
+
+
+def main() -> int:
+    write_temp_discovery_cache()
+    lang, t = load_strings()
+    site_urls = parse_site_urls()
+    print(f"Report language: {lang}")
+    print(f"Sites ({len(site_urls)}): {', '.join(site_urls)}")
+    token = env("TELEGRAM_BOT_TOKEN", required=True).strip()
+    chat_id = env("TELEGRAM_CHAT_ID", required=True).strip()
+    lookback = int(env("GSC_LOOKBACK_DAYS", "28"))
+    lag = int(env("GSC_DATA_LAG_DAYS", "3"))
+    top_n = int(env("GSC_TOP_N", "8"))
+    inspect_n = int(env("GSC_INSPECT_N", "5"))
+
+    creds = load_credentials()
+    service = gsc_clients(creds)
+    windows = date_windows(lookback, lag)
+    failures: list[str] = []
+
+    for index, site_url in enumerate(site_urls, 1):
+        print(f"Fetching {index}/{len(site_urls)}: {site_url}")
+        try:
+            report = fetch_and_build_report(
+                service=service,
+                t=t,
+                site_url=site_url,
+                windows=windows,
+                top_n=top_n,
+                inspect_n=inspect_n,
+                site_index=index,
+                site_count=len(site_urls),
+            )
+            send_telegram(token, chat_id, report)
+            print(f"Report sent for {site_url}")
+        except HttpError as exc:
+            failures.append(f"{site_url}: Search Console API error: {exc}")
+            print(failures[-1], file=sys.stderr)
+        except SystemExit as exc:
+            failures.append(f"{site_url}: {exc}")
+            print(failures[-1], file=sys.stderr)
+        except Exception as exc:
+            failures.append(f"{site_url}: {exc}")
+            print(failures[-1], file=sys.stderr)
+
+    if failures:
+        raise SystemExit(f"{t['failed_sites']}: " + " | ".join(failures))
+    print("All reports sent successfully.")
     return 0
 
 
