@@ -32,4 +32,4 @@ jobs:
           GSC_SITE_URL: ${{ secrets.GSC_SITE_URL }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python gsc_telegram_report_v2.py
+        run: python gsc_telegram_report_v3.py
