@@ -11,7 +11,13 @@ GitHub Actions 工作流：`.github/workflows/gsc_report.yml`（每天 01:00 UTC
 3. 创建 **服务账号**，下载 JSON 密钥（整份 JSON 后面会放到 GitHub Secret）。
 4. 打开 [Search Console](https://search.google.com/search-console)，在对应资源（域名资源 `sc-domain:lodi646app.ph` 或网址前缀 `https://lodi646app.ph/`）里，把该服务账号邮箱加为 **完全用户**。
 
-`GSC_SITE_URL` 必须与 Search Console 里的资源标识完全一致。
+`GSC_SITE_URL` 必须与 Search Console 里的资源标识完全一致。多个站点写在同一个值里即可（逗号、分号或换行分隔），例如：
+
+```
+sc-domain:lodi646app.ph, sc-domain:example2.com, https://example3.com/
+```
+
+每个站点会单独发一条 Telegram 报表。同一个服务账号需要加进所有这些 GSC 资源。
 
 ## 2. Telegram
 
@@ -26,7 +32,7 @@ GitHub Actions 工作流：`.github/workflows/gsc_report.yml`（每天 01:00 UTC
 | Secret | 说明 |
 | --- | --- |
 | `GSC_SERVICE_ACCOUNT_JSON` | 服务账号 JSON 全文 |
-| `GSC_SITE_URL` | 例如 `sc-domain:lodi646app.ph` |
+| `GSC_SITE_URL` | 一个或多个资源，逗号/换行分隔 |
 | `TELEGRAM_BOT_TOKEN` | Bot token |
 | `TELEGRAM_CHAT_ID` | 数字 ID，频道可能是 `-100...` |
 
@@ -36,10 +42,18 @@ GitHub Actions 工作流：`.github/workflows/gsc_report.yml`（每天 01:00 UTC
 cd gsc_report
 pip install -r requirements.txt
 set GSC_SERVICE_ACCOUNT_JSON=C:\path\to\service-account.json
-set GSC_SITE_URL=sc-domain:lodi646app.ph
+set GSC_SITE_URL=sc-domain:lodi646app.ph,sc-domain:example2.com,https://example3.com/
 set TELEGRAM_BOT_TOKEN=123:abc
 set TELEGRAM_CHAT_ID=123456789
 python gsc_telegram_report.py
 ```
 
-可选环境变量：`GSC_LOOKBACK_DAYS`（默认 28）、`GSC_DATA_LAG_DAYS`（默认 3）、`GSC_TOP_N`（默认 8）、`GSC_INSPECT_N`（默认 5，设为 0 可跳过 URL Inspection）。
+可选环境变量：
+
+- `REPORT_LANG`：`en`（英文，默认）或 `zh`（中文）。也支持 `english` / `chinese` / `zh-CN`
+- `GSC_LOOKBACK_DAYS`（默认 28）
+- `GSC_DATA_LAG_DAYS`（默认 3）
+- `GSC_TOP_N`（默认 8）
+- `GSC_INSPECT_N`（默认 5，设为 0 可跳过 URL Inspection）
+
+定时任务默认英文。若每天都要中文，在仓库 **Settings → Secrets and variables → Actions → Variables** 增加 `REPORT_LANG=zh`。手动 Run workflow 时也可以在下拉框里选 `en` 或 `zh`。
